@@ -1,0 +1,21 @@
+[project]
+name = "LinkedIn Auto Job Applier"
+version = "0.1.0"
+description = ""
+requires-python = "==3.12.8"
+dependencies = [
+    "email_validator==2.2.0",
+    "langchain-ollama==0.2.2",
+    "ollama==0.4.6",
+    "openai==1.58.1",
+    "pandas==2.2.3",
+    "psycopg2-binary==2.9.10",
+    "PyAutoGUI==0.9.54",
+    "setuptools==75.6.0",
+    "sqlmodel==0.0.23",
+    "undetected-chromedriver==3.5.5"
+]
+
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"

@@ -28,12 +28,15 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support.select import Select
 from selenium.webdriver.remote.webelement import WebElement
 from selenium.common.exceptions import NoSuchElementException, ElementClickInterceptedException, NoSuchWindowException, ElementNotInteractableException
+from sqlmodel import Session
 
 from config.personals import *
 from config.questions import *
 from config.search import *
 from config.secrets import use_AI, username, password
 from config.settings import *
+
+from models import SubmittedJob, engine
 
 from modules.open_chrome import *
 from modules.helpers import *
@@ -43,6 +46,8 @@ from modules.ai.openaiConnections import *
 
 from typing import Literal
 
+from utils.linkedin_mail_reader import process_profile, process_company
+from utils.send_emails_to_hrs import send_emails_to_hrs
 
 pyautogui.FAILSAFE = False
 # if use_resume_generator:    from resume_generator import is_logged_in_GPT, login_GPT, open_resume_chat, create_custom_resume
@@ -722,25 +727,54 @@ def screenshot(driver: WebDriver, job_id: str, failedAt: str) -> str:
 #>
 
 
-
+# TODO: Write this to Postgres
 def submitted_jobs(job_id: str, title: str, company: str, work_location: str, work_style: str, description: str, experience_required: int | Literal['Unknown', 'Error in extraction'], 
                    skills: list[str] | Literal['In Development'], hr_name: str | Literal['Unknown'], hr_link: str | Literal['Unknown'], resume: str, 
                    reposted: bool, date_listed: datetime | Literal['Unknown'], date_applied:  datetime | Literal['Pending'], job_link: str, application_link: str, 
-                   questions_list: set | None, connect_request: Literal['In Development']) -> None:
+                   questions_list: set | None, connect_request: Literal['In Development'], company_link: str) -> None:
     '''
     Function to create or update the Applied jobs CSV file, once the application is submitted successfully
     '''
     try:
         with open(file_name, mode='a', newline='', encoding='utf-8') as csv_file:
-            fieldnames = ['Job ID', 'Title', 'Company', 'Work Location', 'Work Style', 'About Job', 'Experience required', 'Skills required', 'HR Name', 'HR Link', 'Resume', 'Re-posted', 'Date Posted', 'Date Applied', 'Job Link', 'External Job link', 'Questions Found', 'Connect Request']
+            fieldnames = ['Job ID', 'Title', 'Company', 'Company Link', 'Work Location', 'Work Style', 'About Job', 'Experience required', 'Skills required', 'HR Name', 'HR Link', 'Resume', 'Re-posted', 'Date Posted', 'Date Applied', 'Job Link', 'External Job link', 'Questions Found', 'Connect Request']
             writer = csv.DictWriter(csv_file, fieldnames=fieldnames)
             if csv_file.tell() == 0: writer.writeheader()
-            writer.writerow({'Job ID':job_id, 'Title':title, 'Company':company, 'Work Location':work_location, 'Work Style':work_style, 
+            writer.writerow({'Job ID':job_id, 'Title':title, 'Company':company, 'Company Link': company_link, 'Work Location':work_location, 'Work Style':work_style, 
                             'About Job':description, 'Experience required': experience_required, 'Skills required':skills, 
                                 'HR Name':hr_name, 'HR Link':hr_link, 'Resume':resume, 'Re-posted':reposted, 
                                 'Date Posted':date_listed, 'Date Applied':date_applied, 'Job Link':job_link, 
                                 'External Job link':application_link, 'Questions Found':questions_list, 'Connect Request':connect_request})
         csv_file.close()
+        try:
+            with Session(engine) as session:
+                job = SubmittedJob(
+                    job_id=job_id,
+                    title=title,
+                    company=company,
+                    company_link=company_link,
+                    work_location=work_location,
+                    work_style=work_style,
+                    description=description,
+                    experience_required=None if isinstance(experience_required, str) else experience_required,
+                    skills=None if isinstance(skills, str) else skills,
+                    hr_name=None if hr_name == "Unknown" else hr_name,
+                    hr_link=None if hr_link == "Unknown" else hr_link,
+                    resume=resume,
+                    reposted=reposted,
+                    date_listed=None if isinstance(date_listed, str) else date_listed,
+                    date_applied=None if isinstance(date_applied, str) else date_applied,
+                    job_link=job_link,
+                    application_link=application_link,
+                    questions_list=None if questions_list is None else list(questions_list),
+                    connect_request=connect_request,
+                    is_mail_sent=False
+                )
+                session.add(job)
+                session.commit()
+        except Exception as e:
+            print("Failed to update submitted jobs list!", e)
+            pyautogui.alert("Failed to update the database of applied jobs!", "Failed Logging")
     except Exception as e:
         print_lg("Failed to update submitted jobs list!", e)
         pyautogui.alert("Failed to update the excel of applied jobs!\nProbably because of 1 of the following reasons:\n1. The file is currently open or in use by another program\n2. Permission denied to write to the file\n3. Failed to find the file", "Failed Logging")
@@ -814,6 +848,11 @@ def apply_to_jobs(search_terms: list[str]) -> None:
                     reposted = False
                     questions_list = None
                     screenshot_name = "Not Available"
+                    company_link = "Unknown"
+                    try:
+                        company_link = driver.find_element(By.CSS_SELECTOR, '.job-details-jobs-unified-top-card__container--two-pane a').get_attribute('href').replace('life', '')
+                    except Exception as e:
+                        print_lg(e)
 
                     try:
                         rejected_jobs, blacklisted_companies, jobs_top_card = check_blacklist(rejected_jobs,job_id,company,blacklisted_companies)
@@ -956,14 +995,29 @@ def apply_to_jobs(search_terms: list[str]) -> None:
                             return
                         if skip: continue
 
-                    submitted_jobs(job_id, title, company, work_location, work_style, description, experience_required, skills, hr_name, hr_link, resume, reposted, date_listed, date_applied, job_link, application_link, questions_list, connect_request)
+                    submitted_jobs(job_id, title, company, work_location, work_style, description, experience_required, skills, hr_name, hr_link, resume, reposted, date_listed, date_applied, job_link, application_link, questions_list, connect_request, company_link)
                     if uploaded:   useNewResume = False
 
+
+
                     print_lg(f'Successfully saved "{title} | {company}" job. Job ID: {job_id} info')
+                    
                     current_count += 1
                     if application_link == "Easy Applied": easy_applied_count += 1
                     else:   external_jobs_count += 1
                     applied_jobs.add(job_id)
+
+                    print_lg("Sending Mail to HRs")
+                    print_lg("Saving HR Email")
+                    if hr_link and hr_link != "Unknown":
+                        process_profile(hr_link)
+                    print_lg("Saving Company's HR Email")
+                    process_company(company_link)
+                    print_lg("Sending mails to Company HRs")
+                    send_emails_to_hrs(company_link, company, description)
+                    print_lg("Sent mails to Company HRs")
+
+
 
 
 
